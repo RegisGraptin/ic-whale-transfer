@@ -1,0 +1,9 @@
+type SubscriptionState = record {
+  last_transfer_time: int;
+};
+
+type Result = variant { Ok : text; Err : text };
+
+service : {
+  "transfer_usdc_periodically": () -> (Result);
+};
