@@ -1,9 +1,15 @@
-type SubscriptionState = record {
-  last_transfer_time: int;
+type State = record {
+  timer_id: Option<TimerId>;
+  logs: Vec<String>;
+  poll_count: usize;
 };
 
 type Result = variant { Ok : text; Err : text };
 
 service : {
-  "transfer_usdc_periodically": () -> (Result);
+  "watch_usdc_transfer_start": () -> (Result);
+  "watch_usdc_transfer_stop": () -> (Result);
+  "watch_usdc_transfer_is_polling": () -> (Result);
+  "watch_usdc_transfer_poll_count": () -> (Result);
+  "watch_usdc_transfer_get": () -> (Result);
 };
