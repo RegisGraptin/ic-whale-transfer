@@ -1,18 +1,26 @@
 use std::{cell::RefCell, time::Duration};
 
-use crate::get_rpc_service_base;
+use crate::{create_icp_signer, get_rpc_service_base, get_rpc_service_sepolia};
+
 use alloy::{
+    network::EthereumWallet,
     eips::BlockNumberOrTag,
-    primitives::{address, U256},
+    primitives::{address, Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::{Filter, Log},
+    signers::Signer,
     sol,
     sol_types::SolEvent,
     transports::icp::IcpConfig,
 };
+
 use ic_cdk_timers::TimerId;
 
 const POLL_LIMIT: usize = 3;
+
+thread_local! {
+    static NONCE: RefCell<Option<u64>> = const { RefCell::new(None) };
+}
 
 struct State {
     timer_id: Option<TimerId>,
@@ -40,13 +48,85 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
+
 // Codegen from ABI file to interact with the contract.
 sol!(
-    #[allow(missing_docs)]
-    #[sol(abi)]
+    #[allow(missing_docs, clippy::too_many_arguments)]
+    #[sol(rpc)]
+    WhaleNFT,
+    "src/abi/WhaleNFT.json"
+);
+
+sol!(
+    #[allow(missing_docs, clippy::too_many_arguments)]
+    #[sol(rpc)]
     USDC,
     "src/abi/USDC.json"
 );
+
+async fn mint_new_whale_nft(target_address: Address) -> Result<String, String> {
+
+    // Setup signer
+    let signer = create_icp_signer().await;
+    let address = signer.address();
+
+    // Setup provider
+    let wallet = EthereumWallet::from(signer);
+    let rpc_service = get_rpc_service_sepolia();
+    let config = IcpConfig::new(rpc_service);
+    let provider = ProviderBuilder::new()
+        .with_gas_estimation()
+        .wallet(wallet)
+        .on_icp(config);
+
+    // Attempt to get nonce from thread-local storage
+    let maybe_nonce = NONCE.with_borrow(|maybe_nonce| {
+        // If a nonce exists, the next nonce to use is latest nonce + 1
+        maybe_nonce.map(|nonce| nonce + 1)
+    });
+
+    // If no nonce exists, get it from the provider
+    let nonce = if let Some(nonce) = maybe_nonce {
+        nonce
+    } else {
+        provider.get_transaction_count(address).await.unwrap_or(0)
+    };
+
+    // Mint a new NFT
+    let contract = WhaleNFT::new(
+        address!("63A0bfd6a5cdCF446ae12135E2CD86b908659568"),
+        provider.clone(),
+    );
+
+    match contract
+        .newWhale(target_address)
+        .nonce(nonce)
+        .chain_id(11155111)
+        .from(address)
+        .send()
+        .await
+    {
+        Ok(builder) => {
+            let node_hash = *builder.tx_hash();
+            let tx_response = provider.get_transaction_by_hash(node_hash).await.unwrap();
+
+            match tx_response {
+                Some(tx) => {
+                    // The transaction has been mined and included in a block, the nonce
+                    // has been consumed. Save it to thread-local storage. Next transaction
+                    // for this address will use a nonce that is = this nonce + 1
+                    NONCE.with_borrow_mut(|nonce| {
+                        *nonce = Some(tx.nonce);
+                    });
+                    Ok(format!("{:?}", tx))
+                }
+                None => Err("Could not get transaction.".to_string()),
+            }
+        }
+        Err(e) => Err(format!("{:?}", e)),
+    }
+
+}
 
 /// Using the ICP poller for Alloy allows smart contract canisters
 /// to watch EVM blockchain changes easily. In this example, the canister
@@ -67,7 +147,7 @@ async fn watch_usdc_transfer_start() -> Result<String, String> {
 
     // This callback will be called every time new logs are received
     let callback = |incoming_logs: Vec<Log>| {
-        STATE.with_borrow_mut(|state| {
+        STATE.with_borrow_mut(|state| async {
             for log in incoming_logs.iter() {
                 let transfer: Log<USDC::Transfer> = log.log_decode().unwrap();
                 let USDC::Transfer { from, to, value } = transfer.data();
@@ -87,8 +167,8 @@ async fn watch_usdc_transfer_start() -> Result<String, String> {
                         .logs
                         .push(format!("{from_fmt} -> {to_fmt}, value: {value:?}"));
 
-                    // Mint a new NFT
-                    
+                    // Issue here as we have an async call data when we want to mint a NFT while pulling event
+                    mint_new_whale_nft(*from).await;
                 }
             }
 
