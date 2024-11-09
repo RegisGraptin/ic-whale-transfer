@@ -1,0 +1,10 @@
+{
+    "canisters": {
+        "backend": {
+            "type": "rust",
+            "main": "src/main.rs",
+            "candid": "src/backend.did",
+            "package": "whale_watcher"
+        }
+    }
+}
