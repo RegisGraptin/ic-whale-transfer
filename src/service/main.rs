@@ -147,7 +147,7 @@ async fn watch_usdc_transfer_start() -> Result<String, String> {
 
     // This callback will be called every time new logs are received
     let callback = |incoming_logs: Vec<Log>| {
-        STATE.with_borrow_mut(|state| async {
+        STATE.with_borrow_mut(|state| {
             for log in incoming_logs.iter() {
                 let transfer: Log<USDC::Transfer> = log.log_decode().unwrap();
                 let USDC::Transfer { from, to, value } = transfer.data();
@@ -168,7 +168,7 @@ async fn watch_usdc_transfer_start() -> Result<String, String> {
                         .push(format!("{from_fmt} -> {to_fmt}, value: {value:?}"));
 
                     // Issue here as we have an async call data when we want to mint a NFT while pulling event
-                    mint_new_whale_nft(*from).await;
+                    mint_new_whale_nft(*from);
                 }
             }
 
